@@ -428,18 +428,6 @@ foreach ($requiredTitle in $taskTitles) {
 - Verify Content-Type header: `application/json-patch+json`
 - Ensure Area Path and Iteration Path are valid
 
----
-
-## 📊 Comparison: PowerShell vs Pipeline
-
-| Feature | PowerShell Script | Azure Pipeline |
-|---------|-------------------|----------------|
-| **Setup Time** | 5 minutes | 10-15 minutes |
-| **Ease of Use** | ⭐⭐⭐⭐⭐ Very Easy | ⭐⭐⭐⭐ Easy |
-| **Automation** | Manual trigger | Can be automated |
-| **Dependencies** | PowerShell only | Azure Pipeline service |
-| **Best For** | Quick testing, one-off tasks | CI/CD integration, team use |
-| **Cost** | Free | Free (with parallelism grant) |
 
 ---
 
@@ -490,40 +478,3 @@ Both approaches use **Basic Authentication** with PAT:
 ```
 Authorization: Basic {base64(":PAT_TOKEN")}
 ```
-
----
-
-## 🤝 Contributing
-
-Contributions are welcome! Please:
-
-1. Fork the repository
-2. Create a feature branch: `git checkout -b feature/improvement`
-3. Commit your changes: `git commit -m 'Add improvement'`
-4. Push to the branch: `git push origin feature/improvement`
-5. Open a Pull Request
-
----
-
-## 📝 License
-
-This project is licensed under the MIT License.
-
----
-
-## 🙏 Acknowledgments
-
-- Azure DevOps REST API Documentation
-- Microsoft PowerShell Documentation
-- Applix AI for the assignment opportunity
-
----
-
-## 📧 Contact
-
-For questions or issues, please open an issue in this repository.
-
----
-
-**Last Updated:** December 2024  
-**Version:** 1.0.0
