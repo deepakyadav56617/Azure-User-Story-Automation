@@ -1,0 +1,317 @@
+trigger: none
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+parameters:
+- name: userStoryId
+  displayName: 'User Story ID'
+  type: string
+  default: ''
+
+variables:
+  organizationUrl: 'https://dev.azure.com/deepak-devops'
+  projectName: 'User Story Automation'
+
+steps:
+- task: PowerShell@2
+  displayName: 'Create 5 Child Tasks (Idempotent - Fixed)'
+  env:
+    SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+  inputs:
+    targetType: 'inline'
+    script: |
+      $orgUrl = "$(organizationUrl)"
+      $project = "$(projectName)"
+      $userStoryId = "${{ parameters.userStoryId }}"
+
+      Write-Host "=====================================" -ForegroundColor Cyan
+      Write-Host "Azure DevOps Task Creator Pipeline" -ForegroundColor Cyan
+      Write-Host "=====================================" -ForegroundColor Cyan
+      Write-Host "Organization: $orgUrl"
+      Write-Host "Project: $project"
+      Write-Host "User Story ID: $userStoryId"
+      Write-Host ""
+
+      # Authentication
+      $token = $env:SYSTEM_ACCESSTOKEN
+      $base64AuthInfo = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes(":$token"))
+
+      $headers = @{
+          Authorization = "Basic $base64AuthInfo"
+          "Content-Type" = "application/json"
+      }
+
+      $headersPost = @{
+          Authorization = "Basic $base64AuthInfo"
+          "Content-Type" = "application/json-patch+json"
+      }
+
+      $taskTitles = @(
+          "Requirements & Grooming",
+          "Design & Approach",
+          "Implementation",
+          "Test & Validation",
+          "Documentation & Handover"
+      )
+
+      Write-Host "Fetching User Story #$userStoryId details..." -ForegroundColor Yellow
+      Write-Host ""
+
+      try {
+          $userStoryUrl = "$orgUrl/$project/_apis/wit/workitems/${userStoryId}?`$expand=relations&api-version=7.1"
+          Write-Host "Debug - User Story URL: $userStoryUrl"
+          
+          $userStory = Invoke-RestMethod -Uri $userStoryUrl -Headers $headers -Method Get
+
+          $areaPath = $userStory.fields.'System.AreaPath'
+          $iterationPath = $userStory.fields.'System.IterationPath'
+          $storyTitle = $userStory.fields.'System.Title'
+
+          Write-Host "✅ User Story found!" -ForegroundColor Green
+          Write-Host "   Title: $storyTitle"
+          Write-Host "   Area Path: $areaPath"
+          Write-Host "   Iteration Path: $iterationPath"
+          Write-Host ""
+      }
+      catch {
+          Write-Host "❌ ERROR: Could not fetch User Story #$userStoryId" -ForegroundColor Red
+          Write-Host "Error details: $_" -ForegroundColor Red
+          exit 1
+      }
+
+      Write-Host "=====================================" -ForegroundColor Yellow
+      Write-Host "IDEMPOTENCY CHECK: Scanning for existing child tasks..." -ForegroundColor Yellow
+      Write-Host "=====================================" -ForegroundColor Yellow
+      Write-Host ""
+
+      $existingTasks = @()
+      $shouldCreateTasks = $false
+
+      try {
+          if ($userStory.relations) {
+              Write-Host "Checking User Story relations..." -ForegroundColor Cyan
+              
+              $childRelations = $userStory.relations | Where-Object { 
+                  $_.rel -eq "System.LinkTypes.Hierarchy-Forward" 
+              }
+              
+              Write-Host "Found $($childRelations.Count) child work items" -ForegroundColor Cyan
+              
+              if ($childRelations.Count -gt 0) {
+                  foreach ($relation in $childRelations) {
+                      $childId = $relation.url -replace '.*/', ''
+                      
+                      try {
+                          $childUrl = "$orgUrl/$project/_apis/wit/workitems/${childId}?api-version=7.1"
+                          $childItem = Invoke-RestMethod -Uri $childUrl -Headers $headers -Method Get
+                          
+                          $childType = $childItem.fields.'System.WorkItemType'
+                          $childTitle = $childItem.fields.'System.Title'
+                          
+                          if ($childType -eq "Task") {
+                              $existingTasks += @{
+                                  id = $childItem.id
+                                  title = $childTitle
+                              }
+                              Write-Host "   Found Task #${childId}: $childTitle" -ForegroundColor Gray
+                          } else {
+                              Write-Host "   Skipping non-Task child: $childType #${childId}" -ForegroundColor DarkGray
+                          }
+                      }
+                      catch {
+                          Write-Host "   Warning: Could not fetch child #${childId}" -ForegroundColor Yellow
+                      }
+                  }
+              }
+          }
+          
+          Write-Host ""
+          Write-Host "Total existing Task children: $($existingTasks.Count)" -ForegroundColor Cyan
+          Write-Host ""
+          
+          if ($existingTasks.Count -gt 0) {
+              Write-Host "Existing tasks:" -ForegroundColor Cyan
+              $existingTitles = @()
+              foreach ($task in $existingTasks) {
+                  Write-Host "   ✓ Task #$($task.id): $($task.title)" -ForegroundColor Green
+                  $existingTitles += $task.title
+              }
+              Write-Host ""
+              
+              $missingTasks = @()
+              foreach ($requiredTitle in $taskTitles) {
+                  $found = $false
+                  foreach ($existingTitle in $existingTitles) {
+                      if ($existingTitle.Trim() -eq $requiredTitle.Trim()) {
+                          $found = $true
+                          break
+                      }
+                  }
+                  if (-not $found) {
+                      $missingTasks += $requiredTitle
+                  }
+              }
+              
+              if ($missingTasks.Count -eq 0) {
+                  Write-Host "=====================================" -ForegroundColor Green
+                  Write-Host "✅ IDEMPOTENCY: All 5 tasks already exist!" -ForegroundColor Green
+                  Write-Host "=====================================" -ForegroundColor Green
+                  Write-Host ""
+                  Write-Host "No new tasks will be created." -ForegroundColor Green
+                  Write-Host "This prevents duplicate task creation." -ForegroundColor Green
+                  Write-Host ""
+                  Write-Host "View User Story: $orgUrl/$project/_workitems/edit/$userStoryId"
+                  Write-Host ""
+                  exit 0
+              } else {
+                  Write-Host "Missing tasks that will be created:" -ForegroundColor Yellow
+                  foreach ($missing in $missingTasks) {
+                      Write-Host "   - $missing" -ForegroundColor Yellow
+                  }
+                  Write-Host ""
+                  $taskTitles = $missingTasks
+                  $shouldCreateTasks = $true
+              }
+          } else {
+              Write-Host "No existing child tasks found." -ForegroundColor Cyan
+              Write-Host "Will create all 5 tasks." -ForegroundColor Cyan
+              Write-Host ""
+              $shouldCreateTasks = $true
+          }
+      }
+      catch {
+          Write-Host "⚠️  Warning: Could not check existing tasks reliably" -ForegroundColor Yellow
+          Write-Host "Error: $_" -ForegroundColor Yellow
+          Write-Host ""
+          
+          try {
+              Write-Host "Attempting fallback method using WIQL query..." -ForegroundColor Yellow
+              
+              $queryBody = @{
+                  query = "SELECT [System.Id], [System.Title] FROM WorkItems WHERE [System.Parent] = $userStoryId AND [System.WorkItemType] = 'Task'"
+              } | ConvertTo-Json
+
+              $queryUrl = "$orgUrl/$project/_apis/wit/wiql?api-version=7.1"
+              $queryResult = Invoke-RestMethod -Uri $queryUrl -Headers $headersPost -Method Post -Body $queryBody
+
+              if ($queryResult.workItems.Count -gt 0) {
+                  Write-Host "Found $($queryResult.workItems.Count) existing tasks via WIQL" -ForegroundColor Cyan
+                  
+                  $existingTitles = @()
+                  foreach ($wi in $queryResult.workItems) {
+                      $taskUrl = "$orgUrl/$project/_apis/wit/workitems/$($wi.id)?api-version=7.1"
+                      $task = Invoke-RestMethod -Uri $taskUrl -Headers $headers -Method Get
+                      $existingTitles += $task.fields.'System.Title'
+                      Write-Host "   Found: $($task.fields.'System.Title')" -ForegroundColor Gray
+                  }
+                  
+                  $missingTasks = @()
+                  foreach ($requiredTitle in $taskTitles) {
+                      if ($existingTitles -notcontains $requiredTitle) {
+                          $missingTasks += $requiredTitle
+                      }
+                  }
+                  
+                  if ($missingTasks.Count -eq 0) {
+                      Write-Host ""
+                      Write-Host "✅ All tasks exist! Exiting to prevent duplicates." -ForegroundColor Green
+                      exit 0
+                  } else {
+                      $taskTitles = $missingTasks
+                      $shouldCreateTasks = $true
+                  }
+              } else {
+                  $shouldCreateTasks = $true
+              }
+          }
+          catch {
+              Write-Host "Fallback method also failed. Proceeding cautiously..." -ForegroundColor Yellow
+              $shouldCreateTasks = $true
+          }
+      }
+
+      if (-not $shouldCreateTasks) {
+          Write-Host "Skipping task creation (all tasks exist)" -ForegroundColor Green
+          exit 0
+      }
+
+      Write-Host "=====================================" -ForegroundColor Yellow
+      Write-Host "Creating child tasks..." -ForegroundColor Yellow
+      Write-Host "=====================================" -ForegroundColor Yellow
+      Write-Host ""
+
+      $successCount = 0
+      $taskIds = @()
+
+      foreach ($title in $taskTitles) {
+          Write-Host "Creating task: $title" -ForegroundColor Cyan
+          
+          $body = @(
+              @{
+                  op = "add"
+                  path = "/fields/System.Title"
+                  value = $title
+              },
+              @{
+                  op = "add"
+                  path = "/fields/System.WorkItemType"
+                  value = "Task"
+              },
+              @{
+                  op = "add"
+                  path = "/fields/System.AreaPath"
+                  value = $areaPath
+              },
+              @{
+                  op = "add"
+                  path = "/fields/System.IterationPath"
+                  value = $iterationPath
+              },
+              @{
+                  op = "add"
+                  path = "/relations/-"
+                  value = @{
+                      rel = "System.LinkTypes.Hierarchy-Reverse"
+                      url = "$orgUrl/$project/_apis/wit/workitems/$userStoryId"
+                  }
+              }
+          ) | ConvertTo-Json -Depth 10
+
+          $createUrl = "$orgUrl/$project/_apis/wit/workitems/`$Task?api-version=7.1"
+
+          try {
+              $result = Invoke-RestMethod -Uri $createUrl -Headers $headersPost -Method Post -Body $body
+              Write-Host "   ✅ SUCCESS: Created (ID: $($result.id))" -ForegroundColor Green
+              $successCount++
+              $taskIds += $result.id
+              Start-Sleep -Milliseconds 300
+          }
+          catch {
+              Write-Host "   ❌ ERROR: Failed to create '$title'" -ForegroundColor Red
+              Write-Host "   Details: $_" -ForegroundColor Red
+          }
+      }
+
+      Write-Host ""
+      Write-Host "=====================================" -ForegroundColor Cyan
+      Write-Host "SUMMARY" -ForegroundColor Cyan
+      Write-Host "=====================================" -ForegroundColor Cyan
+
+      if ($successCount -eq $taskTitles.Count) {
+          Write-Host "✅ SUCCESS: Created $successCount task(s)!" -ForegroundColor Green
+          Write-Host ""
+          if ($taskIds.Count -gt 0) {
+              Write-Host "Newly created Task IDs: $($taskIds -join ', ')"
+          }
+      } else {
+          Write-Host "⚠️  WARNING: Created $successCount out of $($taskTitles.Count) required tasks" -ForegroundColor Yellow
+      }
+
+      Write-Host ""
+      Write-Host "View User Story: $orgUrl/$project/_workitems/edit/$userStoryId"
+      Write-Host ""
+
+      if ($successCount -lt $taskTitles.Count -and $taskTitles.Count -gt 0) {
+          exit 1
+      }
